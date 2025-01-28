@@ -1,2 +1,3 @@
-print("Hello")
-print("Antilopas")
+from fastapi import FastAPI
+from request import app
+    
