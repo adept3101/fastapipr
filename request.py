@@ -1,7 +1,11 @@
 from fastapi import FastAPI, HTTPException, Response, Depends
-from cats_data import load_cats, save_cats
 from valid import NewCat, UserLoginSchema
 from authorization import security,config
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from database import get_db
+from models import Cat
+
 
 app = FastAPI()
 
@@ -20,62 +24,68 @@ async def protected():
 
 @app.get("/cats",
          tags=["Коты"],
-         summary="Получить всех котят")
-async def read_cats():
-    cats = await load_cats()
+         summary="Получить всех")
+async def get_cats(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Cat))
+    cats = result.scalars().all()
     return cats
 
 @app.get("/cats/{cats_id}",
          tags=["Коты"],
          summary="Получить конкретного кота")
-async def get_cats(cats_id: int):  
-    cats = await load_cats() 
-    for cat in cats:
-        if cat["id"] == cats_id:
-            return cat
-    raise HTTPException(status_code=404, detail="Кот не найден.")
+async def get_cat(id:int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Cat).where(Cat.id == id))
+    cat = result.scalars().first()
+
+    if cat  is None:
+        raise HTTPException(status_code=404, detail="Cat not found.")
+    
+    return cat
 
 @app.post("/cats",
           tags=["Коты"],
-          summary="Добавить нового кота")
-async def add_cats(new_cat: NewCat):
-    cats = await load_cats()
-    new_id = max((cat["id"] for cat in cats), default=0) + 1
-    new_cat_data = {
-        "id": new_id,
-        "nickname": new_cat.nickname,
-        "color": new_cat.color,
-        "age": new_cat.age,
-    }
-    cats.append(new_cat_data)
-    await save_cats(cats)
-    return {"success": True, "message": "Кот успешно добавлен"}
+          summary="Добавить кота"
+          )
+async def add_cat(name: str, color: str, age: int, db: AsyncSession = Depends(get_db)):
+    new_cat = Cat(name=name, color=color, age=age)
+    db.add(new_cat)
+    await db.commit()
+    await db.refresh(new_cat)
+    return new_cat
 
 @app.delete("/cats/{cats_id}",
             tags=["Коты"],
             summary="Удалить кота")
-async def delete_cat(cats_id: int):
-    cats = await load_cats()
-    cat_to_delete = next((cat for cat in cats if cat["id"] == cats_id), None)
+async def delete_cat(id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Cat).where(Cat.id == id))
+    cat = result.scalars().first()
 
-    if not cat_to_delete:
-        raise HTTPException(status_code=404, detail="Кот не найден.")
+    if cat is None:
+        raise HTTPException(status_code=404, detail="Cat not found.")
+
+    await db.delete(cat)
+    await db.commit()
     
-    cats = [cat for cat in cats if cat["id"] != cats_id]
-    await save_cats(cats)
+    return {"message": "Cat deleted successfully"}
 
-    return {"success": True, "message": f"Кот с ID {cats_id} успешно удален."}
+@app.put("/cats/{cats_id}",
+         tags=["Коты"],
+         summary="Изменить кота")
+async def update_cat(id: int, name: str = None, color: str = None, age: int = None, db:AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Cat).where(Cat.id == id))
+    cat = result.scalars().first()
 
-# @app.put("/cats/{cats_id}",
-#          tags=["Коты"],
-#          summary="Изменить параметры кота")
-# async def update_cat(cats_id: int, updated_cat: NewCat):
-#     cats = await load_cats()
-#     for cat in cats:
-#         if cat["id"] == cats_id:
-#             # Обновляем данные кота
-#             cat["nickname"] = updated_cat.nickname
-#             cat["color"] = updated_cat.color
-#             cat["age"] = updated_cat.age
-#             await save_cats(cats)
-#             return {"success": True,}
+    if cat is None:
+        raise HTTPException(status_code=404, detail="Cat not found.")
+
+    if name:
+        cat.name = name
+    if color:
+        cat.color = color
+    if age is not None:
+        cat.age = age
+
+    await db.commit()
+    await db.refresh(cat)
+    
+    return cat
